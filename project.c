@@ -16,13 +16,18 @@
 typedef struct Guest {
 	int id;
 	struct Guest* next;
-} Person;
+} Guest;
 
 typedef struct Queue {
 	int size;
 	Guest* front;
 	Guest* back;
 } Queue;
+
+void addQueue(Queue* q, int guest_id);
+int removeQueue(Queue* q);
+void* generate_arrivals(void* arg);
+void* ride(void* arg);
 
 void* ride(void* arg) {
 	Queue* q = (Queue*) arg;
@@ -39,19 +44,19 @@ void* ride(void* arg) {
 	}
 	printf("Total number of Passengers loaded: %d\n", loaded_guests);
 	printf("Ride in Progress...\n");
-	sleep(LOADING_TIME/ 60.0);
-	sleep(RIDE_TIME / 60.0);
-	sleep(UNLOADING_TIME / 60.0);
-	printf("Ride Cycle Complete.\n")
+	sleep(LOADING/ 60.0);
+	sleep(RIDETIME / 60.0);
+	sleep(UNLOADING / 60.0);
+	printf("Ride Cycle Complete.\n");
 	}
 	return NULL;
 }
 
 void addQueue(Queue* q, int guest_id) {
 	if (q->size >= MAXWAITPEOPLE) {
-		printf("Queue is Full.Guest ID: %d is rejected.\n", 
+		printf("Queue is Full.Guest ID: %d is rejected.\n", guest_id); 
 	} else {
-		Guest* new_guest = (Guest*)malloc(sizeof(Guest))
+		Guest* new_guest = (Guest*)malloc(sizeof(Guest));
 		new_guest->id = guest_id;
 		new_guest->next =NULL;
 		
@@ -67,7 +72,7 @@ void addQueue(Queue* q, int guest_id) {
 
 }
 
-void removeQueue(Queue* q) {
+int removeQueue(Queue* q) {
 	if(q->front == NULL) {
 		return -1;
 	} else {
@@ -123,7 +128,7 @@ int main(int argc, char* arg[]) {
 	waitingline.size = 0;
 
 	//Create Arrival Thread
-	if (pthread_create(%arrival_t, NULL, generate_arrivals, (void*)&waitingline) != 0) {
+	if (pthread_create(&arrival_t, NULL, generate_arrivals, (void*)&waitingline) != 0) {
 		perror("Failed to add new arrivals to the thread\n");
 		return 1;
 	}
