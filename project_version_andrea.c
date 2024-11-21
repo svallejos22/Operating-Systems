@@ -54,7 +54,7 @@ void* ride(void* arg) {
 	sleep(RIDETIME / 60.0);
 	sleep(UNLOADING / 60.0);
 	fprintf(output_file, "Ride Cycle Complete.\n");
-	fflush(output_file); // Ensure output is written to file
+	fflush(output_file);
 	}
 	return NULL;
 }
@@ -76,7 +76,7 @@ void addQueue(Queue* q, int guest_id) {
 		q->size++;
 		fprintf(output_file, "Guest ID: %d added to Queue. Guests in Queue: %d\n", guest_id, q->size);
 	}
-	fflush(output_file); // Ensure output is written to file
+	fflush(output_file);
 }
 
 int removeQueue(Queue* q) {
