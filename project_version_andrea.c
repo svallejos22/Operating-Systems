@@ -5,12 +5,15 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include "random437.h"
+#include <time.h> // Include this for time functions
 
 #define MAXWAITPEOPLE 800
 #define LOADING 7
 #define RIDETIME 53
 #define UNLOADING 7
 #define CYCLETIME (LOADING + RIDETIME + UNLOADING)
+#define STARTHOUR 9
+#define TOTALMINUTES 600
 int CARNUM = 0;
 int MAXPERCAR = 0;
 
@@ -25,6 +28,8 @@ typedef struct Queue {
 	Guest* back;
 } Queue;
 
+FILE *output_file;
+
 void addQueue(Queue* q, int guest_id);
 int removeQueue(Queue* q);
 void* generate_arrivals(void* arg);
@@ -38,24 +43,25 @@ void* ride(void* arg) {
 			if(q->size > 0) {
 				int guest_id = removeQueue(q);
 				if(guest_id != -1) {
-					printf(" Guest %d loaded onto ride.\n", guest_id);
+					fprintf(output_file, " Guest %d loaded onto ride.\n", guest_id);
 					loaded_guests++;
 			} 
 		}
 	}
-	printf("Total number of Passengers loaded: %d\n", loaded_guests);
-	printf("Ride in Progress...\n");
+	fprintf(output_file, "Total number of Passengers loaded: %d\n", loaded_guests);
+	fprintf(output_file, "Ride in Progress...\n");
 	sleep(LOADING/ 60.0);
 	sleep(RIDETIME / 60.0);
 	sleep(UNLOADING / 60.0);
-	printf("Ride Cycle Complete.\n");
+	fprintf(output_file, "Ride Cycle Complete.\n");
+	fflush(output_file); // Ensure output is written to file
 	}
 	return NULL;
 }
 
 void addQueue(Queue* q, int guest_id) {
 	if (q->size >= MAXWAITPEOPLE) {
-		printf("Queue is Full.Guest ID: %d is rejected.\n", guest_id); 
+		fprintf(output_file, "Queue is Full. Guest ID: %d is rejected.\n", guest_id); 
 	} else {
 		Guest* new_guest = (Guest*)malloc(sizeof(Guest));
 		new_guest->id = guest_id;
@@ -68,9 +74,9 @@ void addQueue(Queue* q, int guest_id) {
 			q->back = new_guest;
 		}
 		q->size++;
-		printf("Guest ID: %d added to Queue. Guests in Queue: %d\n", guest_id, q->size);
+		fprintf(output_file, "Guest ID: %d added to Queue. Guests in Queue: %d\n", guest_id, q->size);
 	}
-
+	fflush(output_file); // Ensure output is written to file
 }
 
 int removeQueue(Queue* q) {
@@ -93,7 +99,7 @@ int removeQueue(Queue* q) {
 void* generate_arrivals(void* arg) {
 	Queue* q = (Queue*)arg;
 
-	for(int minute = 0; minute , 600; minute++) {
+	for(int minute = 0; minute<TOTALMINUTES; minute++) {
 		int meanArrival;
 		if (minute < 120) {
 			meanArrival = 25;
@@ -108,11 +114,12 @@ void* generate_arrivals(void* arg) {
 		}
 
 		int numArrivals = poissonRandom(meanArrival);
+	fprintf(output_file, "Number of arrival: %d\n", numArrivals);
 	//Add New Guest to Queue
 	for (int i = 0; i < numArrivals; i++) {
 		addQueue(q, i + minute*100);
 	}	
-	sleep(1); //simulate 1 minute passing (each minute is equal to 1 second)
+	usleep(10000); // 10ms = 10,000 microseconds
 	}
 	return NULL;
 }
@@ -134,6 +141,29 @@ int main(int argc, char *argv[]) {
                 exit(EXIT_FAILURE);
         }
     }
+
+	// Open file for writing WILL BE USE TO LOG INFO
+	output_file = fopen("simulation.txt", "w");
+	if (!output_file) {
+		perror("Failed to open file for writing");
+		exit(EXIT_FAILURE);
+	}
+
+	
+	/** THIS IS NOT NEEDED THIS IS FOR MY OWN TESTING LOL */
+	time_t now = time(NULL);
+	struct tm *current_time = localtime(&now);
+	char time_str[100];
+	strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", current_time);
+
+	fprintf(output_file, "-**************************************************************-\n");
+	fprintf(output_file, "SIMULATION STARTED AT: %s\n\n", time_str);
+	fprintf(output_file, "CARNUM SET TO: %d\n", CARNUM);
+	fprintf(output_file, "MAXPERCAR SET TO: %d\n", MAXPERCAR);
+	fprintf(output_file, "-**************************************************************-\n\n\n");
+	fflush(output_file); 
+	/**********************************/
+
 	pthread_t ride_t[CARNUM];
 
 	//Queue Initialization
@@ -166,5 +196,9 @@ int main(int argc, char *argv[]) {
 			return 1;
 		}
 	}
+
+	// Close file
+	fclose(output_file);
+
     return 0;
 }
