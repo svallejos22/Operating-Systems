@@ -8,12 +8,9 @@
 #include <time.h> // Include this for time functions
 
 #define MAXWAITPEOPLE 800
-#define LOADING 7
-#define RIDETIME 53
-#define UNLOADING 7
-#define CYCLETIME (LOADING + RIDETIME + UNLOADING)
-#define STARTHOUR 9
 #define TOTALMINUTES 600
+#define VIRTUALMINUTE 100 // 1 virtual minute = 100ms
+
 int CARNUM = 0;
 int MAXPERCAR = 0;
 
@@ -29,103 +26,89 @@ typedef struct Queue {
 } Queue;
 
 FILE *output_file;
+int total_arrived = 0, total_rejected = 0, total_ridden = 0, total_waiting = 0, longest_line = 0, longest_wait_time = 0;
 
-void addQueue(Queue* q, int guest_id);
-int removeQueue(Queue* q);
+pthread_mutex_t lock;
+pthread_cond_t cond;
+
 void* generate_arrivals(void* arg);
 void* ride(void* arg);
 
-void* ride(void* arg) {
-	Queue* q = (Queue*) arg;
-	while(1) {
-		int loaded_guests = 0;
-		for (int i = 0; i <= MAXPERCAR; i++) {
-			if(q->size > 0) {
-				int guest_id = removeQueue(q);
-				if(guest_id != -1) {
-					fprintf(output_file, " Guest %d loaded onto ride.\n", guest_id);
-					loaded_guests++;
-			} 
-		}
-	}
-	fprintf(output_file, "Total number of Passengers loaded: %d\n", loaded_guests);
-	fprintf(output_file, "Ride in Progress...\n");
-	sleep(LOADING/ 60.0);
-	sleep(RIDETIME / 60.0);
-	sleep(UNLOADING / 60.0);
-	fprintf(output_file, "Ride Cycle Complete.\n");
-	fflush(output_file);
-	}
-	return NULL;
+void* ride(void *arg) {
+	printf("RIDE\n");
+
+	int carID = *(int*)arg;
+
+    for (int minute = 0; minute < TOTALMINUTES; minute++) {
+        pthread_mutex_lock(&lock);
+
+        while (total_waiting == 0) {
+            pthread_cond_wait(&cond, &lock);
+        }
+
+        int toLoad = (total_waiting < MAXPERCAR) ? total_waiting : MAXPERCAR;
+        total_waiting -= toLoad;
+        total_ridden += toLoad;
+
+		fprintf(output_file, "Car %d: Loaded=%d, Remaining Waiting=%d\n", carID, toLoad, total_waiting);
+
+        pthread_mutex_unlock(&lock);
+		usleep(VIRTUALMINUTE * 1000); //ride duration(load time + ride time)
+    }
+    return NULL;
 }
 
-void addQueue(Queue* q, int guest_id) {
-	if (q->size >= MAXWAITPEOPLE) {
-		fprintf(output_file, "Queue is Full. Guest ID: %d is rejected.\n", guest_id); 
-	} else {
-		Guest* new_guest = (Guest*)malloc(sizeof(Guest));
-		new_guest->id = guest_id;
-		new_guest->next =NULL;
-		
-		if(q->back == NULL) {
-			q->front = q->back = new_guest;
-		} else {
-			q->back->next = new_guest;
-			q->back = new_guest;
-		}
-		q->size++;
-		fprintf(output_file, "Guest ID: %d added to Queue. Guests in Queue: %d\n", guest_id, q->size);
-	}
-	fflush(output_file);
-}
-
-int removeQueue(Queue* q) {
-	if(q->front == NULL) {
-		return -1;
-	} else {
-		Guest* temp = q->front;
-		int guest_id = temp->id;
-		q->front = q->front->next;
-
-		if(q->front == NULL) {
-			q->back = NULL;
-		}
-		free(temp);
-		q->size--;
-		return guest_id;
-	}
-}
-
+/*
+People arriving to the ride 
+*/
 void* generate_arrivals(void* arg) {
-	Queue* q = (Queue*)arg;
+    for(int minute = 0; minute < TOTALMINUTES; minute++) {
+        pthread_mutex_lock(&lock);
+        printf("Current minute:%d\n", minute);
+        int meanArrival;
+        if (minute < 120) {
+            meanArrival = 25;
+        } else if (minute < 240) {
+            meanArrival = 35;
+        } else if (minute < 360) {
+            meanArrival = 45;
+        } else if (minute < 480) {
+            meanArrival = 35;
+        } else {
+            meanArrival = 25;
+        }
 
-	for(int minute = 0; minute<TOTALMINUTES; minute++) {
-		int meanArrival;
-		if (minute < 120) {
-			meanArrival = 25;
-		} else if (minute < 240) {
-			meanArrival = 35;
-		} else if (minute < 360) {
-			meanArrival = 45;
-		} else if (minute < 480) {
-			meanArrival = 35;
-		} else {
-			meanArrival = 25;
-		}
+        int arrivals = poissonRandom(meanArrival);
+        int accepted = arrivals; 
+        total_arrived += arrivals;
 
-		int numArrivals = poissonRandom(meanArrival);
-	fprintf(output_file, "Number of arrival: %d\n", numArrivals);
-	//Add New Guest to Queue
-	for (int i = 0; i < numArrivals; i++) {
-		addQueue(q, i + minute*100);
-	}	
-	usleep(10000); // 10ms = 10,000 microseconds
-	}
-	return NULL;
+        if(total_waiting + arrivals > MAXWAITPEOPLE) {
+            accepted = MAXWAITPEOPLE - total_waiting;
+            total_rejected += arrivals - accepted;
+        }
+        total_waiting += accepted;
+
+        if(total_waiting > longest_line) {
+            longest_line  = total_waiting;    //Update the longest line
+            longest_wait_time = minute;       //Update the longest wait time
+        }
+        fprintf(output_file, "Minute %d: Arrived=%d, Rejected=%d, Waiting=%d\n", 
+                minute, arrivals, (arrivals-accepted), total_waiting);
+        if (total_waiting > 0) {
+            pthread_cond_broadcast(&cond);
+        }
+        pthread_mutex_unlock(&lock);
+        usleep(VIRTUALMINUTE * 1000);
+    }
+
+    pthread_mutex_lock(&lock);
+    pthread_cond_broadcast(&cond); // Final signal I GOT THIS FROM CHATGPT
+    pthread_mutex_unlock(&lock);
+
+    return NULL;
 }
 
 int main(int argc, char *argv[]) {
-	pthread_t arrival_t;
 
     int opt;
     while ((opt = getopt(argc, argv, "N:M:")) != -1) { 
@@ -150,41 +133,35 @@ int main(int argc, char *argv[]) {
 	}
 
 	
-	/** THIS IS NOT NEEDED THIS IS FOR MY OWN TESTING LOL */
+	/** THIS IS NOT NEEDED THIS IS FOR MY OWN TESTING */
 	time_t now = time(NULL);
 	struct tm *current_time = localtime(&now);
 	char time_str[100];
 	strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", current_time);
-
 	fprintf(output_file, "-**************************************************************-\n");
 	fprintf(output_file, "SIMULATION STARTED AT: %s\n\n", time_str);
 	fprintf(output_file, "CARNUM SET TO: %d\n", CARNUM);
 	fprintf(output_file, "MAXPERCAR SET TO: %d\n", MAXPERCAR);
 	fprintf(output_file, "-**************************************************************-\n\n\n");
 	fflush(output_file); 
-	/**********************************/
+	/** THIS IS NOT NEEDED THIS IS FOR MY OWN TESTING */
 
-	pthread_t ride_t[CARNUM];
+	pthread_t arrival_t, ride_t[CARNUM];
+	pthread_mutex_init(&lock, NULL);
+    pthread_cond_init(&cond, NULL);
 
-	//Queue Initialization
-	Queue waitingline;
-	waitingline.front = NULL;
-	waitingline.back = NULL;
-	waitingline.size = 0;
+    pthread_create(&arrival_t, NULL, generate_arrivals, NULL);
 
-	//Create Arrival Thread
-	if (pthread_create(&arrival_t, NULL, generate_arrivals, (void*)&waitingline) != 0) {
-		perror("Failed to add new arrivals to the thread\n");
-		return 1;
-	}
-
-	//Create Ride Threads
-	for(int i = 0; i < CARNUM; i++) {
-		if(pthread_create(&ride_t[i], NULL, ride, (void*)&waitingline) != 0) {
+    int carIDs[CARNUM];
+    for (int i = 0; i < CARNUM; i++) {
+		printf("Creating ride threads: %d\n", i); // TODO REMOVE THIS
+        carIDs[i] = i + 1;
+		if(pthread_create(&ride_t[i], NULL, ride, &carIDs[i]) != 0) {
 			perror("Failed to create ride thread\n");
 			return 1;
 		}	
-	}
+
+    }
 
 	if(pthread_join(arrival_t, NULL) != 0) {
 		perror("Failed to join ride thread\n");
@@ -196,6 +173,18 @@ int main(int argc, char *argv[]) {
 			return 1;
 		}
 	}
+
+    pthread_mutex_destroy(&lock);
+    pthread_cond_destroy(&cond);
+
+    printf("Simulation Complete!\n");
+    printf("Total Arrived: %d\n", total_arrived);
+    printf("Total Riders: %d\n", total_ridden);
+    printf("Total Rejected: %d\n", total_rejected);
+    printf("Average Wait Time: TBD\n");
+    printf("Worst Case Line: %d at Minute %d\n",longest_line, longest_wait_time);
+
+    return 0;
 
 	// Close file
 	fclose(output_file);
