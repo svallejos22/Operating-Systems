@@ -14,19 +14,13 @@
 int CARNUM = 0;
 int MAXPERCAR = 0;
 
-typedef struct Guest {
-	int id;
-	struct Guest* next;
-} Guest;
-
-typedef struct Queue {
-	int size;
-	Guest* front;
-	Guest* back;
-} Queue;
-
 FILE *output_file;
-int total_arrived = 0, total_rejected = 0, total_ridden = 0, total_waiting = 0, longest_line = 0, longest_wait_time = 0;
+int total_arrived = 0;
+int total_rejected = 0;
+int total_ridden = 0;
+int total_waiting = 0;
+int longest_line = 0;
+int longest_wait_time = 0;
 
 pthread_mutex_t lock;
 pthread_cond_t cond;
@@ -35,7 +29,6 @@ void* generate_arrivals(void* arg);
 void* ride(void* arg);
 
 void* ride(void *arg) {
-	printf("RIDE\n");
 
 	int carID = *(int*)arg;
 
@@ -64,7 +57,7 @@ People arriving to the ride
 void* generate_arrivals(void* arg) {
     for(int minute = 0; minute < TOTALMINUTES; minute++) {
         pthread_mutex_lock(&lock);
-        printf("Current minute:%d\n", minute);
+        printf("Current minute:%d\n", minute); // TODO remove this
         int meanArrival;
         if (minute < 120) {
             meanArrival = 25;
@@ -102,7 +95,7 @@ void* generate_arrivals(void* arg) {
     }
 
     pthread_mutex_lock(&lock);
-    pthread_cond_broadcast(&cond); // Final signal I GOT THIS FROM CHATGPT
+    pthread_cond_broadcast(&cond);
     pthread_mutex_unlock(&lock);
 
     return NULL;
@@ -131,7 +124,6 @@ int main(int argc, char *argv[]) {
 		perror("Failed to open file for writing");
 		exit(EXIT_FAILURE);
 	}
-
 	
 	/** THIS IS NOT NEEDED THIS IS FOR MY OWN TESTING */
 	time_t now = time(NULL);
@@ -154,7 +146,6 @@ int main(int argc, char *argv[]) {
 
     int carIDs[CARNUM];
     for (int i = 0; i < CARNUM; i++) {
-		printf("Creating ride threads: %d\n", i); // TODO REMOVE THIS
         carIDs[i] = i + 1;
 		if(pthread_create(&ride_t[i], NULL, ride, &carIDs[i]) != 0) {
 			perror("Failed to create ride thread\n");
