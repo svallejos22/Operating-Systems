@@ -13,8 +13,8 @@
 
 
 FILE *output_file;
-int CARNUM = 0;             //set by user input
-int MAXPERCAR = 0;         // set by user inpute
+int CARNUM = 0;             // set by user input
+int MAXPERCAR = 0;          // set by user inpute
 int total_arrived = 0;
 int total_rejected = 0;
 int total_ridden = 0;
@@ -25,7 +25,6 @@ int longest_wait_time = 0;
 typedef struct Guest {
 	int id;
 	struct Guest* next;
-	struct timeval arrival_time;
 } Guest;
 
 typedef struct Queue {
@@ -39,6 +38,7 @@ typedef struct Queue {
 
 pthread_mutex_t lock;
 pthread_cond_t cond;
+Queue waiting_line = {0, NULL, NULL, 0, 0};
 
 void addQueue(Queue* q, int guest_id);
 int removeQueue(Queue* q);
@@ -54,7 +54,6 @@ void addQueue(Queue* q, int guest_id) {
     }
 	new_guest->id = guest_id;
 	new_guest->next = NULL;
-	// gettimeofday(&new_guest->arrival_time, NULL);
 
 	if(q->back == NULL) {
 		q->front = q->back = new_guest;
@@ -68,7 +67,7 @@ void addQueue(Queue* q, int guest_id) {
 	if(q->size > q->worst_case_length) {
 		q->worst_case_length = q->size;
 	}
-	
+    pthread_cond_broadcast(&cond);
 }
 
 int removeQueue(Queue* q) {
@@ -78,7 +77,6 @@ int removeQueue(Queue* q) {
 		Guest* temp = q->front;
 		int guest_id = temp->id;
 		struct timeval departure_time;
-		// gettimeofday(&departure_time, NULL);
 
 		q->front = q->front->next;
 
@@ -106,6 +104,15 @@ void* ride(void *arg) {
 
         //Load guest
         int toLoad = (total_waiting < MAXPERCAR) ? total_waiting : MAXPERCAR;
+        
+        for (int i = 0; i < toLoad; i++) {
+            int guest_id = removeQueue(&waiting_line); // Pass the queue as an argument
+            if (guest_id == -1) {
+                fprintf(stderr, "Queue removal failed unexpectedly.\n");
+                break;
+            }
+        }
+
         total_waiting -= toLoad;
         total_ridden += toLoad;
 
@@ -141,7 +148,7 @@ void* generate_arrivals(void* arg) {
         }
 
         int arrivals = poissonRandom(meanArrival);
-        total_arrived += arrivals;                  // increment the tota arrived guest
+        total_arrived += arrivals;                  // increment the total arrived guests
         int accepted = arrivals; 
 
         int rejected_on_arrival = 0;
@@ -164,7 +171,8 @@ void* generate_arrivals(void* arg) {
         // WWW is number of persons in the waiting line, HH:MM:SS is hours, minutes, and seconds.
 
         // TODO update HH:MM:SS time in file output string
-        fprintf(output_file, "%d arrive %d reject %d wait-line %d at HH:MM:SS\n", minute, arrivals, rejected_on_arrival, q->size);
+        fprintf(output_file, "%03d arrive %d reject %d wait-line %d at %02d:%02d:0\n",
+         minute, arrivals, rejected_on_arrival, q->size, 9 + minute / 60, minute % 60);
 
         // Notify if there are new arrivals???
         if (arrivals > rejected_on_arrival) {
@@ -231,7 +239,7 @@ int main(int argc, char *argv[]) {
 	pthread_mutex_init(&lock, NULL);
     pthread_cond_init(&cond, NULL);
 
-    Queue waiting_line = {0, NULL, NULL, 0, 0};
+//    Queue waiting_line = {0, NULL, NULL, 0, 0};
     pthread_create(&arrival_t, NULL, generate_arrivals, &waiting_line);
 
     int carIDs[CARNUM];
