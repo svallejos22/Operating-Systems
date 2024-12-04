@@ -4,7 +4,7 @@
 #include <pthread.h>
 #include <sys/types.h>
 #include "random437.h"
-#include <time.h> 
+#include <time.h>
 
 #define MAXWAITPEOPLE 800
 #define TOTALMINUTES 600
@@ -44,6 +44,11 @@ pthread_cond_t car_cond = PTHREAD_COND_INITIALIZER;      // Condition variable f
 // Mutex for queue operations
 pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
 
+// New synchronization variables
+pthread_mutex_t arrival_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t arrival_cond = PTHREAD_COND_INITIALIZER;
+int arrival_done[TOTALMINUTES] = {0};
+
 // Function prototypes
 void* timekeeper(void* arg);
 void* generate_arrivals(void* arg);
@@ -67,12 +72,14 @@ void* generate_arrivals(void* arg) {
     Queue* q = (Queue*)arg;
 
     for (int minute = 0; minute < TOTALMINUTES; minute++) {
+        // Synchronize with the global clock
         pthread_mutex_lock(&global_lock);
-        while (global_minute <= minute) {
+        while (global_minute != minute + 1) {
             pthread_cond_wait(&global_cond, &global_lock);
         }
         pthread_mutex_unlock(&global_lock);
 
+        // Perform arrivals processing
         pthread_mutex_lock(&queue_lock);
         int meanArrival = (minute < 120) ? 25 : (minute < 240) ? 35 : (minute < 360) ? 45 : (minute < 480) ? 35 : 25;
         int arrivals = poissonRandom(meanArrival);
@@ -90,9 +97,17 @@ void* generate_arrivals(void* arg) {
             }
         }
 
+        // Log the arrival information for this minute
         fprintf(output_file, "%03d arrive %d reject %d wait-line %d at %02d:%02d:00\n",
                 minute, arrivals, rejected_on_arrival, q->size, 9 + minute / 60, minute % 60);
+        fflush(output_file); // Ensure that the data is written immediately
         pthread_mutex_unlock(&queue_lock);
+
+        // Signal ride threads that arrival processing for this minute is done
+        pthread_mutex_lock(&arrival_mutex);
+        arrival_done[minute] = 1;
+        pthread_cond_broadcast(&arrival_cond);
+        pthread_mutex_unlock(&arrival_mutex);
     }
     return NULL;
 }
@@ -103,14 +118,24 @@ void* ride(void* arg) {
     for (int minute = 0; minute < TOTALMINUTES; minute++) {
         // Wait for the global clock to reach the current minute
         pthread_mutex_lock(&global_lock);
-        while (global_minute <= minute) {
+        while (global_minute != minute + 1) {
             pthread_cond_wait(&global_cond, &global_lock);
         }
+        pthread_mutex_unlock(&global_lock);
+
+        // Wait until arrival processing for this minute is done
+        pthread_mutex_lock(&arrival_mutex);
+        while (arrival_done[minute] == 0) {
+            pthread_cond_wait(&arrival_cond, &arrival_mutex);
+        }
+        pthread_mutex_unlock(&arrival_mutex);
 
         // Wait for this car's turn to load passengers
+        pthread_mutex_lock(&global_lock);
         while (current_car_turn != carID) {
             pthread_cond_wait(&car_cond, &global_lock);
         }
+        pthread_mutex_unlock(&global_lock);
 
         // Car loading passengers
         pthread_mutex_lock(&queue_lock);
@@ -125,9 +150,11 @@ void* ride(void* arg) {
         total_ridden += toLoad;
 
         fprintf(output_file, "Car %d: Loaded=%d, Remaining Waiting=%d\n", carID, toLoad, total_waiting);
+        fflush(output_file); // Ensure that the data is written immediately
         pthread_mutex_unlock(&queue_lock);
 
         // Update the car turn for the next car
+        pthread_mutex_lock(&global_lock);
         current_car_turn = (current_car_turn + 1) % CARNUM;
         pthread_cond_broadcast(&car_cond);
         pthread_mutex_unlock(&global_lock);
@@ -193,6 +220,12 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    // Check if CARNUM and MAXPERCAR have been set
+    if (CARNUM == 0 || MAXPERCAR == 0) {
+        fprintf(stderr, "Usage: %s -N <CARNUM> -M <MAXPERCAR>\n", argv[0]);
+        exit(EXIT_FAILURE);
+    }
+
     // Open file for writing logs
     output_file = fopen("simulation.txt", "w");
     if (!output_file) {
@@ -200,12 +233,19 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
+    // Seed the random number generator
+    time_t t;
+    time(&t);
+    srand48(t);
+
     // Create threads
-    pthread_t arrival_thread, timekeeper_thread, ride_threads[CARNUM];
+    pthread_t arrival_thread, timekeeper_thread, *ride_threads;
+    ride_threads = (pthread_t*)malloc(sizeof(pthread_t) * CARNUM);
+
     pthread_create(&timekeeper_thread, NULL, timekeeper, NULL);
     pthread_create(&arrival_thread, NULL, generate_arrivals, &waiting_line);
 
-    int carIDs[CARNUM];
+    int *carIDs = (int*)malloc(sizeof(int) * CARNUM);
     for (int i = 0; i < CARNUM; i++) {
         carIDs[i] = i;  // Cars are indexed from 0 to CARNUM-1
         pthread_create(&ride_threads[i], NULL, ride, &carIDs[i]);
@@ -227,6 +267,10 @@ int main(int argc, char *argv[]) {
 
     // Close log file
     fclose(output_file);
+
+    // Free allocated memory
+    free(ride_threads);
+    free(carIDs);
 
     return 0;
 }
