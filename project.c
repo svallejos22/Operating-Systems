@@ -1,254 +1,233 @@
 #include <stdio.h>
-#include <unistd.h>
 #include <stdlib.h>
-#include <pthread.h>
 #include <unistd.h>
-#include <getopt.h>
+#include <pthread.h>
 #include <sys/types.h>
-#include <sys/time.h>
 #include "random437.h"
+#include <time.h> 
 
 #define MAXWAITPEOPLE 800
-#define LOADING 7
-#define RIDETIME 53
-#define UNLOADING 7
-#define CYCLETIME (LOADING + RIDETIME + UNLOADING)
+#define TOTALMINUTES 600
+#define VIRTUALMINUTE 100 // 1 virtual minute = 100ms
 
-int CARNUM = 4; //default
-int MAXPERCAR = 7; //default
+FILE *output_file;
+int CARNUM = 0;             // set by user input
+int MAXPERCAR = 0;          // set by user input
+int total_arrived = 0;
+int total_rejected = 0;
+int total_ridden = 0;
+int total_waiting = 0;
 
+// Define a Queue structure to manage guests waiting for the ride
 typedef struct Guest {
-	int id;
-	struct Guest* next;
-	struct timeval arrival_time;
+    int id;
+    struct Guest* next;
 } Guest;
 
 typedef struct Queue {
-	int size;
-	Guest* front;
-	Guest* back;
-	int worst_case_length;
-	int worst_case_time;
+    int size;
+    Guest* front;
+    Guest* back;
+    int longest_line;
+    int longest_wait_time;
 } Queue;
 
-void addQueue(Queue* q, int guest_id);
-int removeQueue(Queue* q);
+Queue waiting_line = {0, NULL, NULL, 0, 0};
+
+// Global synchronization variables
+int global_minute = 0;
+int current_car_turn = 0; // Indicates which car should run next
+pthread_mutex_t global_lock = PTHREAD_MUTEX_INITIALIZER; // Mutex for accessing the global clock
+pthread_cond_t global_cond = PTHREAD_COND_INITIALIZER;   // Condition variable for the global clock
+pthread_cond_t car_cond = PTHREAD_COND_INITIALIZER;      // Condition variable for car turns
+
+// Mutex for queue operations
+pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
+
+// Function prototypes
+void* timekeeper(void* arg);
 void* generate_arrivals(void* arg);
 void* ride(void* arg);
-void calcAvg_waitTime(Queue* q);
+void addQueue(Queue* q, int guest_id);
+int removeQueue(Queue* q);
 
-int total_guests_loaded = 0;
-int total_guests_rejected = 0;
-int total_guests_arrived = 0;
-volatile int stop_ride = 0;
-long long total_wait_time = 0;
+void* timekeeper(void* arg) {
+    for (int minute = 0; minute < TOTALMINUTES; minute++) {
+        usleep(VIRTUALMINUTE * 1000);  // Sleep for the duration of a virtual minute
 
-pthread_barrier_t barrier;
-
-void* ride(void* arg) {
-	int thread_index = *((int*)arg);
-	free(arg);
-
-	Queue* q = (Queue*) arg;
-
-	while (!stop_ride) {
-		printf("Ride is running thread %d\n", thread_index);
-		int loaded_guests = 0;
-		for (int i = 0; i <= MAXPERCAR; i++) {
-			if(q->size > 0) {
-				int guest_id = removeQueue(q);
-				if(guest_id != -1) {
-					loaded_guests++;
-					total_guests_loaded++;
-			} 
-		}
-	}
-	
-	sleep(LOADING/ 60.0);
-	sleep(RIDETIME / 60.0);
-	sleep(UNLOADING / 60.0);
-
-	pthread_barrier_wait(&barrier);
-	}
-
-	printf("Ride thread %d has completed for the day.\n", thread_index);
-	return NULL;
-}
-
-void calcAvg_waitTime(Queue* q) {
-	if(total_guests_loaded > 0) {
-		double average_waiting_time = (double)total_wait_time / total_guests_loaded / 60.0; 
-		printf("Average Wait Time Per Person: %.2f minutes\n", average_waiting_time);
-	} else {
-		printf("Average Wait Time Per Person: No guests loaded\n");
-	}
-}
-
-void addQueue(Queue* q, int guest_id) {
-	Guest* new_guest = (Guest*)malloc(sizeof(Guest));
-	new_guest->id = guest_id;
-	new_guest->next = NULL;
-	gettimeofday(&new_guest->arrival_time, NULL);
-
-	if (q->size >= MAXWAITPEOPLE) {
-	       total_guests_rejected++;
-       		free(new_guest);	       
-	} else {
-		if(q->back == NULL) {
-			q->front = q->back = new_guest;
-		} else {
-			q->back->next = new_guest;
-			q->back = new_guest;
-		}
-		q->size++;
-		total_guests_arrived++;
-
-		if(q->size > q->worst_case_length){
-			q->worst_case_length = q->size;
-			q->worst_case_time = total_guests_arrived;
-		}
-	}
-}
-
-int removeQueue(Queue* q) {
-	if(q->front == NULL) {
-		return -1;
-	} else {
-		Guest* temp = q->front;
-		int guest_id = temp->id;
-		struct timeval departure_time;
-		gettimeofday(&departure_time, NULL);
-
-		q->front = q->front->next;
-
-		if(q->front == NULL) {
-			q->back = NULL;
-		}
-		free(temp);
-		q->size--;
-		return guest_id;
-	}
+        pthread_mutex_lock(&global_lock);
+        global_minute++;
+        pthread_cond_broadcast(&global_cond); // Notify all threads of the minute update
+        pthread_mutex_unlock(&global_lock);
+    }
+    return NULL;
 }
 
 void* generate_arrivals(void* arg) {
-		Queue* q = (Queue*)arg;
-	FILE* file = fopen("ride_log.txt", "w");
+    Queue* q = (Queue*)arg;
 
-	if(file ==NULL) {
-		perror("Failed to open file");
-		return NULL;
-	}
+    for (int minute = 0; minute < TOTALMINUTES; minute++) {
+        pthread_mutex_lock(&global_lock);
+        while (global_minute <= minute) {
+            pthread_cond_wait(&global_cond, &global_lock);
+        }
+        pthread_mutex_unlock(&global_lock);
 
-	for(int minute = 0; minute < 600; minute++) {
-		int meanArrival;
-		if (minute < 120) {
-			meanArrival = 25;
-		} else if (minute < 240) {
-			meanArrival = 35;
-		} else if (minute < 360) {
-			meanArrival = 45;
-		} else if (minute < 480) {
-			meanArrival = 35;
-		} else {
-			meanArrival = 25;
-		}
+        pthread_mutex_lock(&queue_lock);
+        int meanArrival = (minute < 120) ? 25 : (minute < 240) ? 35 : (minute < 360) ? 45 : (minute < 480) ? 35 : 25;
+        int arrivals = poissonRandom(meanArrival);
 
-		int numArrivals = poissonRandom(meanArrival);
-		int rejected = 0;
+        total_arrived += arrivals;
+        int rejected_on_arrival = 0;
 
-	//Add New Guest to Queue
-	for (int i = 0; i < numArrivals; i++) {
-		if(q->size >= MAXWAITPEOPLE) {
-			rejected++;
-			total_guests_rejected++;
-		} else {
-			addQueue(q, i + minute*100);
-			total_guests_arrived++;  //////////
-		}
-	}
-	
-	fprintf(file, "%03d arrive: %d, Rejected %d, Waiting Line %d at %02d:%02d:%02d\n", minute, numArrivals, rejected, q->size, 9 + (minute / 60), minute % 60, 0);	
-	sleep(1); //simulate 1 minute passing (each minute is equal to 1 second)
-	}
+        for (int i = 0; i < arrivals; i++) {
+            if (q->size >= MAXWAITPEOPLE) {
+                total_rejected++;
+                rejected_on_arrival++;
+            } else {
+                addQueue(q, i + minute * 100);
+                total_waiting++;
+            }
+        }
 
-	fclose(file);
-	stop_ride = 1;
-	pthread_barrier_wait(&barrier);
-	return NULL;
+        fprintf(output_file, "%03d arrive %d reject %d wait-line %d at %02d:%02d:00\n",
+                minute, arrivals, rejected_on_arrival, q->size, 9 + minute / 60, minute % 60);
+        pthread_mutex_unlock(&queue_lock);
+    }
+    return NULL;
 }
 
+void* ride(void* arg) {
+    int carID = *(int*)arg;
+
+    for (int minute = 0; minute < TOTALMINUTES; minute++) {
+        // Wait for the global clock to reach the current minute
+        pthread_mutex_lock(&global_lock);
+        while (global_minute <= minute) {
+            pthread_cond_wait(&global_cond, &global_lock);
+        }
+
+        // Wait for this car's turn to load passengers
+        while (current_car_turn != carID) {
+            pthread_cond_wait(&car_cond, &global_lock);
+        }
+
+        // Car loading passengers
+        pthread_mutex_lock(&queue_lock);
+        int toLoad = (total_waiting < MAXPERCAR) ? total_waiting : MAXPERCAR;
+
+        for (int i = 0; i < toLoad; i++) {
+            int guest_id = removeQueue(&waiting_line);
+            if (guest_id == -1) break;
+        }
+
+        total_waiting -= toLoad;
+        total_ridden += toLoad;
+
+        fprintf(output_file, "Car %d: Loaded=%d, Remaining Waiting=%d\n", carID, toLoad, total_waiting);
+        pthread_mutex_unlock(&queue_lock);
+
+        // Update the car turn for the next car
+        current_car_turn = (current_car_turn + 1) % CARNUM;
+        pthread_cond_broadcast(&car_cond);
+        pthread_mutex_unlock(&global_lock);
+    }
+    return NULL;
+}
+
+void addQueue(Queue* q, int guest_id) {
+    Guest* new_guest = (Guest*)malloc(sizeof(Guest));
+    if (!new_guest) {
+        fprintf(stderr, "Memory allocation failed\n");
+        exit(EXIT_FAILURE);
+    }
+    new_guest->id = guest_id;
+    new_guest->next = NULL;
+
+    if (q->back == NULL) {
+        q->front = q->back = new_guest;
+    } else {
+        q->back->next = new_guest;
+        q->back = new_guest;
+    }
+    q->size++;
+
+    // Track the longest line
+    if (q->size > q->longest_line) {
+        q->longest_line = q->size;
+    }
+}
+
+int removeQueue(Queue* q) {
+    if (q->front == NULL) {
+        return -1;
+    } else {
+        Guest* temp = q->front;
+        int guest_id = temp->id;
+
+        q->front = q->front->next;
+        if (q->front == NULL) {
+            q->back = NULL;
+        }
+        free(temp);
+        q->size--;
+        return guest_id;
+    }
+}
 
 int main(int argc, char *argv[]) {
-	int option;
-	while((option = getopt(argc, argv, "N:M:")) != -1) {
-		switch (option) {
-			case 'N':
-				CARNUM = atoi(optarg);
-				break;
-			case 'M':
-				MAXPERCAR = atoi(optarg);
-				break;
-			default:
-				fprintf(stderr, "Usage: %s [-N CARNUM] [-M MAXPERCAR]\n", argv[0]);
-				exit(EXIT_FAILURE);
-		}
-	}
-	
-	pthread_barrier_init(&barrier, NULL, CARNUM + 1); 
-	pthread_t arrival_t;
-	pthread_t ride_t[CARNUM];
+    int opt;
 
-	//Queue Initialization
-	Queue waitingline;
-	waitingline.front = NULL;
-	waitingline.back = NULL;
-	waitingline.size = 0;
-	waitingline.worst_case_length = 0;
-	waitingline.worst_case_time = 0;
+    // Parse command-line arguments for CARNUM and MAXPERCAR
+    while ((opt = getopt(argc, argv, "N:M:")) != -1) {
+        switch (opt) {
+            case 'N':
+                CARNUM = atoi(optarg);
+                break;
+            case 'M':
+                MAXPERCAR = atoi(optarg);
+                break;
+            default:
+                fprintf(stderr, "Usage: %s -N <CARNUM> -M <MAXPERCAR>\n", argv[0]);
+                exit(EXIT_FAILURE);
+        }
+    }
 
-	//Create Arrival Thread
-	if (pthread_create(&arrival_t, NULL, generate_arrivals, (void*)&waitingline) != 0) {
-		perror("Failed to add new arrivals to the thread\n");
-		return 1;
-	}
+    // Open file for writing logs
+    output_file = fopen("simulation.txt", "w");
+    if (!output_file) {
+        perror("Failed to open file for writing");
+        exit(EXIT_FAILURE);
+    }
 
-	//Create Ride Threads
+    // Create threads
+    pthread_t arrival_thread, timekeeper_thread, ride_threads[CARNUM];
+    pthread_create(&timekeeper_thread, NULL, timekeeper, NULL);
+    pthread_create(&arrival_thread, NULL, generate_arrivals, &waiting_line);
 
-	for(int i = 0; i < CARNUM; i++) {
-		int* thread_index = malloc(sizeof(int));
-		*thread_index = i + 1;
+    int carIDs[CARNUM];
+    for (int i = 0; i < CARNUM; i++) {
+        carIDs[i] = i;  // Cars are indexed from 0 to CARNUM-1
+        pthread_create(&ride_threads[i], NULL, ride, &carIDs[i]);
+    }
 
-		if(pthread_create(&ride_t[i], NULL, ride, (void*)thread_index) != 0) {
-			perror("Failed to create ride thread\n");
-			return 1;
-		}	
-	}
+    // Wait for threads to finish
+    pthread_join(arrival_thread, NULL);
+    for (int i = 0; i < CARNUM; i++) {
+        pthread_join(ride_threads[i], NULL);
+    }
+    pthread_join(timekeeper_thread, NULL);
 
-	if(pthread_join(arrival_t, NULL) != 0) {
-		perror("Failed to join ride thread\n");
-		return 1;
-	}
+    // Print simulation summary
+    printf("Simulation Complete!\n");
+    printf("Total Arrived: %d\n", total_arrived);
+    printf("Total Riders: %d\n", total_ridden);
+    printf("Total Rejected: %d\n", total_rejected);
+    printf("Worst Case Line: %d\n", waiting_line.longest_line);
 
-	stop_ride = 1; //ride stops after arrivals have completed
-	
-	for(int i = 0; i < CARNUM; i++) {
-		if(pthread_join(ride_t[i], NULL) != 0) {
-			perror("Failed to join ride thread\n");
-			return 1;
-		}
-	}
+    // Close log file
+    fclose(output_file);
 
-	calcAvg_waitTime(&waitingline);
-
-	printf("\n Simulation Results:\n");
-	printf("Total Number of Arrivals: %d\n", total_guests_arrived);
-	printf("Total Number of Rejected Guests: %d\n", total_guests_rejected);
-	printf("Total Number of Loaded Guests: %d\n", total_guests_loaded);
-	calcAvg_waitTime(&waitingline);
-	printf("Worst Case Line Length: %d at minute %d\n", waitingline.worst_case_length, waitingline.worst_case_time);
-
-	pthread_barrier_destroy(&barrier);
-	
-	return 0;
+    return 0;
 }
 
