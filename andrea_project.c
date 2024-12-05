@@ -17,7 +17,6 @@ int MAXPERCAR = 0;          // set by user inpute
 int total_arrived = 0;
 int total_rejected = 0;
 int total_ridden = 0;
-int total_waiting = 0;
 int minute = 0;
 long long total_wait_time = 0;
 
@@ -48,13 +47,14 @@ void calcAvgWaitTime(Queue* q);
 
 void addQueue(Queue* q, int guest_id) {
 	Guest* new_guest = (Guest*)malloc(sizeof(Guest));
-	new_guest->arrival_time = minute;
+
     if (!new_guest) {
         fprintf(stderr, "Memory allocation failed\n");
         exit(EXIT_FAILURE);
     }
 	new_guest->id = guest_id;
 	new_guest->next = NULL;
+	new_guest->arrival_time = minute;
 
 	if(q->back == NULL) {
 		q->front = q->back = new_guest;
@@ -66,6 +66,7 @@ void addQueue(Queue* q, int guest_id) {
 
 	if(q->size > q->longest_line) {
 		q->longest_line = q->size;
+		q->longest_wait_time = minute;
 	}
     pthread_cond_broadcast(&cond);
 }
@@ -80,7 +81,7 @@ int removeQueue(Queue* q) {
 		int wait_time = minute - temp->arrival_time;
 		total_wait_time += wait_time;
 		total_ridden++;
-		struct timeval departure_time;
+
 		q->front = q->front->next;
 		if(q->front == NULL) {
 			q->back = NULL;
@@ -94,7 +95,7 @@ int removeQueue(Queue* q) {
 void* ride(void *arg) {
 
 	int carID = *(int*)arg;
-    int last_minute = -1;
+    	int last_minute = -1;
 
     while(1) {
         pthread_mutex_lock(&lock);
@@ -109,13 +110,13 @@ void* ride(void *arg) {
 
         last_minute = minute;
 
-        if(total_waiting == 0) {
+        if(waiting_line.size == 0) {
             pthread_mutex_unlock(&lock);
             continue;
         }
 
         //Load guest
-        int toLoad = (total_waiting < MAXPERCAR) ? total_waiting : MAXPERCAR;
+        int toLoad = (waiting_line.size < MAXPERCAR) ? waiting_line.size : MAXPERCAR;
         
         for (int i = 0; i < toLoad; i++) {
             int guest_id = removeQueue(&waiting_line);
@@ -125,10 +126,7 @@ void* ride(void *arg) {
             }
         }
 
-        total_waiting -= toLoad;
-        total_ridden += toLoad;
-
-		// fprintf(output_file, "Car %d: Loaded=%d, Remaining Waiting=%d\n", carID, toLoad, total_waiting); uncomment for debugging
+	// fprintf(output_file, "Car %d: Loaded=%d, Remaining Waiting=%d\n", carID, toLoad, total_waiting); uncomment for debugging
         pthread_mutex_unlock(&lock);
     }
     return NULL;
@@ -145,17 +143,15 @@ void* generateArrivals(void* arg) {
 
         // printf("Current minute in arrival thread:%d\n", minute); // uncomment to debug
         int meanArrival;
-        if (minute < 120) {
+        if (minute < 120) {  //0900-1059 (2 hours = 120 minutes)
             meanArrival = 25;
-        } else if (minute < 240) {
-            meanArrival = 35;
-        } else if (minute < 360) {
+        } else if (minute < 300) { //1100 -1359 (2hrs + 3hrs = 5hrs = 300 minutes)
             meanArrival = 45;
-        } else if (minute < 480) {
+        } else if (minute < 420) { //1400-1559 (2hrs + 5hrs = 7hrs = 420 minutes)
             meanArrival = 35;
-        } else {
+        } else { //1600-1859 
             meanArrival = 25;
-        }
+        } 
 
         int arrivals = poissonRandom(meanArrival);
         total_arrived += arrivals;                  
@@ -166,10 +162,9 @@ void* generateArrivals(void* arg) {
         {
 		    if(q->size >= MAXWAITPEOPLE) {         
 		    	total_rejected++;
-                rejected_on_arrival++;
+			rejected_on_arrival++;
 		    } else {
 		    	addQueue(q, i + minute*100);
-		    	total_waiting++; 
 		    }       
         }
 
@@ -245,10 +240,10 @@ int main(int argc, char *argv[]) {
 
 	pthread_t arrival_t, ride_t[CARNUM];
 	pthread_mutex_init(&lock, NULL);
-    pthread_cond_init(&cond, NULL);
-    pthread_create(&arrival_t, NULL, generateArrivals, &waiting_line);
-
-    int carIDs[CARNUM];
+    	pthread_cond_init(&cond, NULL);
+    	pthread_create(&arrival_t, NULL, generateArrivals, &waiting_line);
+	
+	int carIDs[CARNUM];
     for (int i = 0; i < CARNUM; i++) {
         carIDs[i] = i + 1;
 		if(pthread_create(&ride_t[i], NULL, ride, &carIDs[i]) != 0) {
@@ -270,8 +265,12 @@ int main(int argc, char *argv[]) {
 	}
 
 	double average_wait_time = 0.0;
+	int avg_minutes = 0;
+	int avg_seconds = 0;
 	if (total_ridden > 0) {
 		average_wait_time = (double) total_wait_time / total_ridden;
+		avg_minutes = (int)average_wait_time;
+		avg_seconds = (average_wait_time - avg_minutes) * 60;
 	}
 
     pthread_mutex_destroy(&lock);
@@ -281,7 +280,7 @@ int main(int argc, char *argv[]) {
     printf("Total Arrived: %d\n", total_arrived);
     printf("Total Riders: %d\n", total_ridden);
     printf("Total Rejected: %d\n", total_rejected);
-    printf("Average Wait Time: %.2f minutes\n", average_wait_time);
+    printf("Average Wait Time: %.2d minutes and %d seconds\n",avg_minutes, avg_seconds);
     printf("Worst Case Line: %d at Minute %d\n", waiting_line.longest_line, waiting_line.longest_wait_time);
 
     return 0;
