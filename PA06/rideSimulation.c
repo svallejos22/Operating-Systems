@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <sys/types.h>
@@ -42,8 +41,6 @@ void addQueue(Queue* q, int guest_id);
 int removeQueue(Queue* q);
 void* generateArrivals(void* arg);
 void* ride(void* arg);
-void calcAvgWaitTime(Queue* q);
-
 
 void addQueue(Queue* q, int guest_id) {
 	Guest* new_guest = (Guest*)malloc(sizeof(Guest));
@@ -125,8 +122,8 @@ void* ride(void *arg) {
                 break;
             }
         }
-
-	// fprintf(output_file, "Car %d: Loaded=%d, Remaining Waiting=%d\n", carID, toLoad, total_waiting); uncomment for debugging
+    // uncomment for debugging
+	// fprintf(output_file, "Car %d: Loaded=%d, Remaining Waiting=%d\n", carID, toLoad, total_waiting); 
         pthread_mutex_unlock(&lock);
     }
     return NULL;
@@ -141,15 +138,16 @@ void* generateArrivals(void* arg) {
     for(minute = 0; minute < TOTALMINUTES; minute++) {
         pthread_mutex_lock(&lock);
 
-        // printf("Current minute in arrival thread:%d\n", minute); // uncomment to debug
+        // uncomment to debug
+        // printf("Current minute in arrival thread:%d\n", minute); 
         int meanArrival;
-        if (minute < 120) {  //0900-1059 (2 hours = 120 minutes)
+        if (minute < 120) {               // 0900-1059 (2 hours = 120 minutes)
             meanArrival = 25;
-        } else if (minute < 300) { //1100 -1359 (2hrs + 3hrs = 5hrs = 300 minutes)
+        } else if (minute < 300) {        // 1100 -1359 (2hrs + 3hrs = 5hrs = 300 minutes)
             meanArrival = 45;
-        } else if (minute < 420) { //1400-1559 (2hrs + 5hrs = 7hrs = 420 minutes)
+        } else if (minute < 420) {        // 1400-1559 (2hrs + 5hrs = 7hrs = 420 minutes)
             meanArrival = 35;
-        } else { //1600-1859 
+        } else {                          // 1600-1859 
             meanArrival = 25;
         } 
 
@@ -192,15 +190,6 @@ void* generateArrivals(void* arg) {
     return NULL;
 }
 
-void calcAvgWaitTime(Queue* q) {
-	if(total_ridden > 0) {
-		double average_waiting_time = (double)q->longest_wait_time / total_ridden / 60.0; 
-		printf("Average Wait Time Per Person: %.2f minutes\n", average_waiting_time);
-	} else {
-		printf("Average Wait Time Per Person: No guests loaded\n");
-	}
-}
-
 int main(int argc, char *argv[]) {
 
     int opt;
@@ -218,8 +207,10 @@ int main(int argc, char *argv[]) {
         }
     }
 
-	// Open file for writing WILL BE USE TO LOG INFO
-	output_file = fopen("simulation.txt", "w");
+	// Open file for writing will be used to LOG INFO
+    char filename[50];
+    sprintf(filename, "N%dM%d.txt", CARNUM, MAXPERCAR);
+	output_file = fopen(filename, "w");
 	if (!output_file) {
 		perror("Failed to open file for writing");
 		exit(EXIT_FAILURE);
