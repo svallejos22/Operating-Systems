@@ -267,12 +267,12 @@ int main(int argc, char *argv[]) {
     pthread_mutex_destroy(&lock);
     pthread_cond_destroy(&cond);
 
-    printf("Simulation Complete!\n");
-    printf("Total Arrived: %d\n", total_arrived);
-    printf("Total Riders: %d\n", total_ridden);
-    printf("Total Rejected: %d\n", total_rejected);
-    printf("Average Wait Time: %.2d minutes and %d seconds\n",avg_minutes, avg_seconds);
-    printf("Worst Case Line: %d at Minute %d\n", waiting_line.longest_line, waiting_line.longest_wait_time);
+    fprintf(output_file, "Simulation Complete!\n");
+    fprintf(output_file, "Total Arrived: %d\n", total_arrived);
+    fprintf(output_file, "Total Riders: %d\n", total_ridden);
+    fprintf(output_file, "Total Rejected: %d\n", total_rejected);
+    fprintf(output_file, "Average Wait Time: %.2d minutes and %d seconds\n",avg_minutes, avg_seconds);
+    fprintf(output_file, "Worst Case Line: %d at Minute %d\n", waiting_line.longest_line, waiting_line.longest_wait_time);
 
     return 0;
 
